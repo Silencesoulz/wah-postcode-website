@@ -1,6 +1,8 @@
 import { CsvVisaWorkTable } from '../VisaWorkTable';
 
-const baseUrl = import.meta.env.DEV ? '/zone-data/data' : 'https://88zones.com/data';
+// Use our own route in every environment. In production Vercel fetches the CSV
+// server-to-server, avoiding the CORS restriction on the source site.
+const baseUrl = '/api/zone-data';
 // Home Affairs specifies tourism and hospitality only for Tables 1–3.
 const tourismJobs = ['Tourism & hospitality'];
 const regionalJobs = [

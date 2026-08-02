@@ -5,10 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/zone-data': {
+      '/api/zone-data': {
         target: 'https://88zones.com',
         changeOrigin: true,
-        rewrite: path => path.replace(/^\/zone-data/, '')
+        rewrite: path => path.replace(/^\/api\/zone-data/, '/data')
       }
     }
   }
