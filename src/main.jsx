@@ -315,6 +315,7 @@ function AustraliaMap({
 }) {
   const [boundaries, setBoundaries] = useState(null);
   const [loadError, setLoadError] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState({ loaded: 0, total: 0 });
   const [zoom, setZoom] = useState(4);
   const [visibleLabelCodes, setVisibleLabelCodes] = useState(new Set());
 
@@ -324,30 +325,56 @@ function AustraliaMap({
       { length: Math.ceil(postcodes.length / 70) },
       (_, index) => postcodes.slice(index * 70, index * 70 + 70),
     );
-    Promise.all(
-      chunks.map((chunk) => {
-        const codes = chunk.map((item) => `'${item.code}'`).join(",");
-        const query = new URLSearchParams({
-          where: `POA_CODE_2021 IN (${codes})`,
-          outFields: "POA_CODE_2021,POA_NAME_2021",
-          returnGeometry: "true",
-          outSR: "4326",
-          f: "geojson",
-        });
-        return fetch(
-          `https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/0/query?${query}`,
-          { signal: controller.signal },
-        ).then((response) => response.json());
-      }),
-    )
-      .then((results) => {
+    setBoundaries(null);
+    setLoadError(false);
+    setLoadingProgress({ loaded: 0, total: chunks.length });
+
+    const fetchChunk = async (chunk) => {
+      const codes = chunk.map((item) => `'${item.code}'`).join(",");
+      const query = new URLSearchParams({
+        where: `POA_CODE_2021 IN (${codes})`,
+        outFields: "POA_CODE_2021,POA_NAME_2021",
+        returnGeometry: "true",
+        outSR: "4326",
+        f: "geojson",
+      });
+      const response = await fetch(
+        `https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/0/query?${query}`,
+        { signal: controller.signal },
+      );
+      if (!response.ok) throw new Error(`Boundary request failed: ${response.status}`);
+      return response.json();
+    };
+
+    const loadBoundaries = async () => {
+      const results = [];
+      const concurrentRequests = 6;
+
+      try {
+        for (let start = 0; start < chunks.length; start += concurrentRequests) {
+          const batch = chunks.slice(start, start + concurrentRequests);
+          const settled = await Promise.allSettled(batch.map(fetchChunk));
+          if (controller.signal.aborted) return;
+
+          settled.forEach((result) => {
+            if (result.status === "fulfilled") results.push(result.value);
+          });
+          setLoadingProgress({
+            loaded: Math.min(start + batch.length, chunks.length),
+            total: chunks.length,
+          });
+        }
+
         const features = results.flatMap((result) => result.features || []);
+        if (!features.length) throw new Error("No postcode boundaries returned");
         onBoundaryCodes(features.map(postcodeCode));
         setBoundaries({ type: "FeatureCollection", features });
-      })
-      .catch((error) => {
-        if (error.name !== "AbortError") setLoadError(true);
-      });
+      } catch (error) {
+        if (!controller.signal.aborted) setLoadError(true);
+      }
+    };
+
+    loadBoundaries();
     return () => controller.abort();
   }, [postcodes, onBoundaryCodes]);
 
@@ -403,7 +430,8 @@ function AustraliaMap({
     <div className="leaflet-wrap">
       <MapContainer
         center={[-25.1, 133.4]}
-        zoom={4}
+        zoom={4.5}
+        zoomSnap={0.5}
         minZoom={4}
         maxZoom={10}
         maxBounds={[
@@ -454,7 +482,7 @@ function AustraliaMap({
           ? "Boundary data could not load — use postcode search."
           : boundaries
             ? `${boundaries.features.length} postcode boundaries loaded`
-            : "Loading postcode boundaries…"}
+            : `Loading postcode boundaries… ${loadingProgress.loaded}/${loadingProgress.total}`}
       </div>
     </div>
   );
@@ -642,7 +670,12 @@ function App() {
     setStateFilter("all");
     setPage(1);
   };
-  const mapPostcodes = jobFilter === "all" ? postcodes : jobPostcodes;
+  const mapPostcodes = useMemo(() => {
+    const candidates = jobFilter === "all" ? postcodes : jobPostcodes;
+    return stateFilter === "all"
+      ? candidates
+      : candidates.filter((item) => item.state === stateFilter);
+  }, [jobFilter, jobPostcodes, postcodes, stateFilter]);
   useEffect(() => {
     setMapBoundaryCodes(null);
   }, [mapPostcodes]);
@@ -845,9 +878,9 @@ function App() {
                 </h2>
               </div>
             </div>
-            {postcodes.length > 0 && (
+            {mapPostcodes.length > 0 && (
               <AustraliaMap
-                key={`${table.id}-${jobFilter}`}
+                key={`${table.id}-${jobFilter}-${stateFilter}`}
                 table={table}
                 postcodes={mapPostcodes}
                 selected={selected}
@@ -855,7 +888,12 @@ function App() {
                 onBoundaryCodes={setMapBoundaryCodes}
                 focusZoom={selectionSource === "map" ? 7 : 9}
               />
-            )}{" "}
+            )}
+            {!loadingTable && mapPostcodes.length === 0 && (
+              <p className="empty main-panel-empty">
+                No postcode boundaries match this state filter.
+              </p>
+            )}
             {selected && (
               <div className="detail-card">
                 <div className="detail-top">
