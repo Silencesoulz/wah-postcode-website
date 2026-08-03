@@ -1,15 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import L from "leaflet";
-import {
-  GeoJSON,
-  MapContainer,
-  TileLayer,
-  ZoomControl,
-  useMap,
-  useMapEvents,
-} from "react-leaflet";
-import "leaflet/dist/leaflet.css";
 import { activeTable, visaTables } from "./data/visaTables";
 import {
   financialLetterPoints,
@@ -19,6 +9,8 @@ import {
   sponsorChecklist,
 } from "./data/visaGuide";
 import "./styles.css";
+
+const AustraliaMap = React.lazy(() => import("./AustraliaMap"));
 
 function Badge({ children }) {
   return <span className="badge green">{children}</span>;
@@ -294,14 +286,7 @@ function LabelDensity({ boundaries, selectedCode, onChange }) {
 }
 
 function useResponsivePageSize() {
-  const getPageSize = () =>
-    window.innerWidth <= 700
-      ? 3
-      : window.innerWidth <= 850
-        ? 6
-        : window.innerHeight >= 1000
-          ? 12
-          : 10;
+  const getPageSize = () => (window.innerWidth <= 700 ? 3 : 5);
   const [pageSize, setPageSize] = useState(getPageSize);
   useEffect(() => {
     const updatePageSize = () => setPageSize(getPageSize());
@@ -329,7 +314,7 @@ function MapFocus({ boundaries, selectedCode, focusZoom }) {
   return null;
 }
 
-function AustraliaMap({
+function LegacyAustraliaMap({
   table,
   postcodes,
   selected,
@@ -534,6 +519,36 @@ function AustraliaMap({
   );
 }
 
+function DeferredAustraliaMap(props) {
+  const mapRootRef = useRef(null);
+  const [shouldLoadMap, setShouldLoadMap] = useState(false);
+
+  useEffect(() => {
+    if (props.selected) setShouldLoadMap(true);
+  }, [props.selected]);
+
+  return (
+    <div ref={mapRootRef}>
+      {shouldLoadMap ? (
+        <React.Suspense
+          fallback={
+            <div className="leaflet-wrap map-deferred-placeholder">
+              <div className="map-intro"><span>TABLE {props.table.number}</span><strong>{props.table.label}</strong><small>Preparing interactive map…</small></div>
+            </div>
+          }
+        >
+          <AustraliaMap {...props} />
+        </React.Suspense>
+      ) : (
+        <div className="leaflet-wrap map-deferred-placeholder">
+          <div className="map-intro"><span>TABLE {props.table.number}</span><strong>{props.table.label}</strong><small>Load the interactive map only when you need it.</small></div>
+          <button className="map-load-button" type="button" onClick={() => setShouldLoadMap(true)}>Load interactive map</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const PLANNER_STORAGE_KEY = "wah-88-day-planner";
 const EVIDENCE_ITEMS = [
   ["contract", "Contract / offer"],
@@ -705,7 +720,7 @@ function Planner({ allPostcodes, eligibilityIndex, jobOptions, postcodePlace }) 
     if (!editingId) {
       setShowRecords(true);
       window.setTimeout(() => {
-        document.querySelector(".planner-entries")?.scrollIntoView({
+        document.querySelector(entry.mode === "actual" ? ".planner-summary" : ".planner-entries")?.scrollIntoView({
           behavior: "smooth",
           block: "start",
         });
@@ -857,7 +872,7 @@ function Planner({ allPostcodes, eligibilityIndex, jobOptions, postcodePlace }) 
           {formError && <p className="planner-error">{formError}</p>}
           <div className="planner-submit-row">
             {editingId && <button type="button" className="planner-cancel" onClick={() => { setDraft(emptyPlannerDraft()); setEditingId(null); }}>Cancel</button>}
-            <button type="submit" disabled={!jobOptions.length}>{editingId ? "Save changes" : "Add to plan"}</button>
+            <button type="submit" disabled={!jobOptions.length}>{editingId ? "Save changes" : "Add record"}</button>
           </div>
         </form>
         <aside className="planner-summary">
@@ -963,10 +978,27 @@ function App() {
   const [allPostcodes, setAllPostcodes] = useState([]);
   const [jobFilter, setJobFilter] = useState("all");
   const [mapBoundaryCodes, setMapBoundaryCodes] = useState(null);
+  const [directoryCodes, setDirectoryCodes] = useState(null);
+  const [searchDirectoryCodes, setSearchDirectoryCodes] = useState(null);
+  const [localityLookup, setLocalityLookup] = useState(null);
   const [mapAreaNames, setMapAreaNames] = useState({});
   const [selectionSource, setSelectionSource] = useState("list");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState("map");
+  const pendingSelectionRef = useRef(null);
+  useEffect(() => {
+    let active = true;
+    import("./data/eligibleLocalities.json")
+      .then((module) => {
+        if (active) setLocalityLookup(module.default);
+      })
+      .catch(() => {
+        if (active) setLocalityLookup({});
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
   const handleBoundaryData = useCallback((features) => {
     setMapBoundaryCodes(features.map(postcodeCode));
     const namesByCode = {};
@@ -986,49 +1018,49 @@ function App() {
   }, []);
   useEffect(() => {
     let active = true;
-    Promise.allSettled(
-      visaTables.map(async (area) => ({ area, records: await area.load() })),
-    ).then((results) => {
-      if (!active) return;
-      const index = {};
-      const combinedPostcodes = {};
-      results
-        .filter((result) => result.status === "fulfilled")
-        .forEach(({ value: { area, records } }) => {
-          records.forEach((record) => {
-            combinedPostcodes[record.code] ||= record;
-            const entry = (index[record.code] ||= {
-              jobs: new Set(),
-              areas: [],
+    const loadEligibilityIndex = () => {
+      Promise.allSettled(
+        visaTables.map(async (area) => ({ area, records: await area.load() })),
+      ).then((results) => {
+        if (!active) return;
+        const index = {};
+        const combinedPostcodes = {};
+        results
+          .filter((result) => result.status === "fulfilled")
+          .forEach(({ value: { area, records } }) => {
+            records.forEach((record) => {
+              combinedPostcodes[record.code] ||= record;
+              const entry = (index[record.code] ||= { jobs: new Set(), areas: [] });
+              area.jobs.forEach((job) => entry.jobs.add(job));
+              if (!entry.areas.some((item) => item.id === area.id)) entry.areas.push(area);
             });
-            area.jobs.forEach((job) => entry.jobs.add(job));
-            if (!entry.areas.some((item) => item.id === area.id))
-              entry.areas.push(area);
           });
-        });
-      setEligibilityIndex(
-        Object.fromEntries(
-          Object.entries(index).map(([code, entry]) => [
-            code,
-            { ...entry, jobs: [...entry.jobs] },
-          ]),
-        ),
-      );
-      setAllPostcodes(
-        Object.values(combinedPostcodes).sort((a, b) =>
-          a.code.localeCompare(b.code),
-        ),
-      );
-    });
+        setEligibilityIndex(
+          Object.fromEntries(
+            Object.entries(index).map(([code, entry]) => [code, { ...entry, jobs: [...entry.jobs] }]),
+          ),
+        );
+        setAllPostcodes(Object.values(combinedPostcodes).sort((a, b) => a.code.localeCompare(b.code)));
+      });
+    };
+    const idleId = window.requestIdleCallback
+      ? window.requestIdleCallback(loadEligibilityIndex, { timeout: 1500 })
+      : window.setTimeout(loadEligibilityIndex, 150);
     return () => {
       active = false;
+      if (window.cancelIdleCallback && window.requestIdleCallback)
+        window.cancelIdleCallback(idleId);
+      else window.clearTimeout(idleId);
     };
   }, []);
   useEffect(() => {
     let active = true;
-    setQuery("");
-    setStateFilter("all");
-    setJobFilter("all");
+    const preserveSearch = pendingSelectionRef.current?.tableId === table.id;
+    if (!preserveSearch) {
+      setQuery("");
+      setStateFilter("all");
+      setJobFilter("all");
+    }
     setPage(1);
     setPostcodes([]);
     setSelected(null);
@@ -1036,7 +1068,22 @@ function App() {
     table
       .load()
       .then((records) => {
-        if (active) setPostcodes(records);
+        if (!active) return;
+        setPostcodes(records);
+        const pendingSelection = pendingSelectionRef.current;
+        if (pendingSelection?.tableId !== table.id) return;
+        pendingSelectionRef.current = null;
+        setSelectionSource(pendingSelection.source);
+        setSelected(
+          records.find((item) => item.code === pendingSelection.item.code) || pendingSelection.item,
+        );
+        window.setTimeout(() => {
+          const isMobile = window.matchMedia("(max-width: 700px)").matches;
+          (isMobile ? document.querySelector(".main-panel") : document.querySelector(".workspace"))?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        }, 0);
       })
       .catch(() => {
         if (active) setPostcodes([]);
@@ -1067,40 +1114,100 @@ function App() {
     [allPostcodes, eligibilityIndex, jobFilter, postcodes],
   );
   const postcodePlace = useCallback(
-    (item) => mapAreaNames[item.code] || item.town,
-    [mapAreaNames],
+    (item) => localityLookup?.[item.code]?.label || mapAreaNames[item.code] || item.town,
+    [localityLookup, mapAreaNames],
   );
   const mappablePostcodes = useMemo(
     () =>
-      mapBoundaryCodes
-        ? jobPostcodes.filter((item) => mapBoundaryCodes.includes(item.code))
+      localityLookup
+        ? jobPostcodes.filter((item) => localityLookup[item.code])
         : [],
-    [jobPostcodes, mapBoundaryCodes],
+    [jobPostcodes, localityLookup],
   );
-  const boundariesLoading = postcodes.length > 0 && mapBoundaryCodes === null;
-  const searchMatches = useMemo(
-    () =>
-      mappablePostcodes.filter((item) =>
-        `${item.code} ${postcodePlace(item)} ${item.state} ${stateNames[item.state] || ""}`
+  const boundariesLoading = postcodes.length > 0 && localityLookup === null;
+  const globalSearchCandidates = useMemo(
+    () => {
+      if (!query.trim()) return [];
+      if (!localityLookup) return [];
+      const pool = (jobFilter === "all"
+        ? allPostcodes
+        : allPostcodes.filter((item) => eligibilityIndex[item.code]?.jobs.includes(jobFilter)))
+        .filter((item) => localityLookup[item.code]);
+      return pool.filter((item) =>
+        `${item.code} ${postcodePlace(item)} ${localityLookup[item.code]?.search || ""} ${item.state} ${stateNames[item.state] || ""}`
           .toLowerCase()
           .includes(query.toLowerCase()),
-      ),
-    [mappablePostcodes, postcodePlace, query],
+      );
+    },
+    [allPostcodes, eligibilityIndex, jobFilter, localityLookup, postcodePlace, query],
+  );
+  useEffect(() => {
+    const controller = new AbortController();
+    const queryValue = query.trim();
+    if (!localityLookup) {
+      setSearchDirectoryCodes(null);
+      return () => controller.abort();
+    }
+    if (!queryValue) {
+      setSearchDirectoryCodes(null);
+      return () => controller.abort();
+    }
+    if (!globalSearchCandidates.length) {
+      setSearchDirectoryCodes([]);
+      return () => controller.abort();
+    }
+    setSearchDirectoryCodes(globalSearchCandidates.map((item) => item.code));
+    return () => controller.abort();
+    setSearchDirectoryCodes(null);
+    const chunks = Array.from(
+      { length: Math.ceil(globalSearchCandidates.length / 350) },
+      (_, index) => globalSearchCandidates.slice(index * 350, index * 350 + 350),
+    );
+    Promise.all(chunks.map(async (chunk) => {
+      const body = new URLSearchParams({
+        where: `POA_CODE_2021 IN (${chunk.map((item) => `'${item.code}'`).join(",")})`,
+        outFields: "POA_CODE_2021",
+        returnGeometry: "false",
+        f: "json",
+      });
+      const response = await fetch(
+        "https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/0/query",
+        { method: "POST", body, signal: controller.signal },
+      );
+      if (!response.ok) throw new Error("Postcode directory request failed");
+      return response.json();
+    })).then((results) => {
+      if (controller.signal.aborted) return;
+      setSearchDirectoryCodes(results.flatMap((result) =>
+        (result.features || []).map((feature) => String(
+          feature.attributes?.poa_code_2021 || feature.attributes?.POA_CODE_2021 || "",
+        ).padStart(4, "0")),
+      ));
+    }).catch(() => {
+      if (!controller.signal.aborted) setSearchDirectoryCodes([]);
+    });
+    return () => controller.abort();
+  }, [globalSearchCandidates, localityLookup, query]);
+  const searchMatches = useMemo(
+    () => query.trim()
+      ? searchDirectoryCodes
+        ? globalSearchCandidates.filter((item) => searchDirectoryCodes.includes(item.code))
+        : []
+      : mappablePostcodes,
+    [globalSearchCandidates, mappablePostcodes, query, searchDirectoryCodes],
+  );
+  const searchVerificationLoading = Boolean(
+    query.trim() && globalSearchCandidates.length && searchDirectoryCodes === null,
   );
   const availableStates = useMemo(
     () =>
       [
         ...new Set(
-          jobPostcodes
-            .filter((item) =>
-              `${item.code} ${postcodePlace(item)} ${item.state} ${stateNames[item.state] || ""}`
-                .toLowerCase()
-                .includes(query.toLowerCase()),
-            )
+          searchMatches
             .map((item) => item.state),
         ),
       ].sort((a, b) => (stateNames[a] || a).localeCompare(stateNames[b] || b)),
-    [jobPostcodes, postcodePlace, query],
+    [searchMatches],
   );
   const matches = useMemo(
     () =>
@@ -1140,6 +1247,15 @@ function App() {
     setTable(item);
   };
   const selectPostcode = (item, source) => {
+    const availableAreas = eligibilityIndex[item.code]?.areas || [];
+    const targetTable = availableAreas.find((area) => area.id === table.id) || availableAreas[0];
+    if (targetTable && targetTable.id !== table.id) {
+      pendingSelectionRef.current = { item, source, tableId: targetTable.id };
+      setMapBoundaryCodes(null);
+      setDirectoryCodes(null);
+      setTable(targetTable);
+      return;
+    }
     setSelectionSource(source);
     setSelected(item);
     window.setTimeout(() => {
@@ -1179,6 +1295,61 @@ function App() {
   useEffect(() => {
     setMapBoundaryCodes(null);
   }, [mapPostcodes]);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!localityLookup) {
+      setDirectoryCodes(null);
+      return () => controller.abort();
+    }
+    setDirectoryCodes(mapPostcodes.filter((item) => localityLookup[item.code]).map((item) => item.code));
+    return () => controller.abort();
+    const chunkSize = 350;
+    const chunks = Array.from(
+      { length: Math.ceil(mapPostcodes.length / chunkSize) },
+      (_, index) => mapPostcodes.slice(index * chunkSize, index * chunkSize + chunkSize),
+    );
+    setDirectoryCodes(null);
+    if (!chunks.length) {
+      setDirectoryCodes([]);
+      return () => controller.abort();
+    }
+
+    const loadDirectory = async () => {
+      try {
+        const results = await Promise.all(
+          chunks.map(async (chunk) => {
+            const codes = chunk.map((item) => `'${item.code}'`).join(",");
+            const body = new URLSearchParams({
+              where: `POA_CODE_2021 IN (${codes})`,
+              outFields: "POA_CODE_2021",
+              returnGeometry: "false",
+              f: "json",
+            });
+            const response = await fetch(
+              "https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/0/query",
+              { method: "POST", body, signal: controller.signal },
+            );
+            if (!response.ok) throw new Error("Postcode directory request failed");
+            return response.json();
+          }),
+        );
+        if (controller.signal.aborted) return;
+        setDirectoryCodes(
+          results.flatMap((result) =>
+            (result.features || []).map((feature) =>
+              String(
+                feature.attributes?.poa_code_2021 || feature.attributes?.POA_CODE_2021 || "",
+              ).padStart(4, "0"),
+            ),
+          ),
+        );
+      } catch {
+        if (!controller.signal.aborted) setDirectoryCodes([]);
+      }
+    };
+    loadDirectory();
+    return () => controller.abort();
+  }, [localityLookup, mapPostcodes]);
   useEffect(() => {
     if (
       mapBoundaryCodes &&
@@ -1348,16 +1519,16 @@ function App() {
                   ))}
                 </section>
               ))}
-              {(loadingTable || boundariesLoading) && (
+              {(loadingTable || boundariesLoading || searchVerificationLoading) && (
                 <p className="empty">Loading Table {table.number} postcodes…</p>
               )}
-              {!loadingTable && !boundariesLoading && !matches.length && (
+              {!loadingTable && !boundariesLoading && !searchVerificationLoading && !matches.length && (
                 <p className="empty">
                   No matching postcodes for this work type.
                 </p>
               )}
             </div>
-            {!loadingTable && !boundariesLoading && matches.length > 0 && (
+            {!loadingTable && !boundariesLoading && !searchVerificationLoading && matches.length > 0 && (
               <div className="pagination">
                 <button
                   onClick={() => setPage(currentPage - 1)}
@@ -1378,7 +1549,9 @@ function App() {
             )}
             <p className="side-foot">
               {boundariesLoading
-                ? "Loading verified postcode boundaries…"
+                ? "Loading verified postcode directory…"
+                : searchVerificationLoading
+                ? "Checking matching postcode…"
                 : matches.length
                 ? `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, matches.length)} of ${matches.length} areas in this category.`
                 : "Choose a category or search for a postcode."}
@@ -1398,7 +1571,7 @@ function App() {
               </div>
             </div>
             {mapPostcodes.length > 0 && (
-              <AustraliaMap
+              <DeferredAustraliaMap
                 key={`${table.id}-${jobFilter}-${stateFilter}`}
                 table={table}
                 postcodes={mapPostcodes}
