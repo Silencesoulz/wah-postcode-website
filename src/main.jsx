@@ -318,12 +318,18 @@ function AustraliaMap({
   const [loadingProgress, setLoadingProgress] = useState({ loaded: 0, total: 0 });
   const [zoom, setZoom] = useState(4);
   const [visibleLabelCodes, setVisibleLabelCodes] = useState(new Set());
+  const geometryGeneralisation =
+    postcodes.length > 1200 ? "0.002" : postcodes.length > 600 ? "0.001" : null;
 
   useEffect(() => {
     const controller = new AbortController();
+    // POST avoids URL-length limits, so each request can safely include many
+    // more postcodes than a GET query. This keeps large tables lightweight.
+    const chunkSize = 350;
     const chunks = Array.from(
-      { length: Math.ceil(postcodes.length / 70) },
-      (_, index) => postcodes.slice(index * 70, index * 70 + 70),
+      { length: Math.ceil(postcodes.length / chunkSize) },
+      (_, index) =>
+        postcodes.slice(index * chunkSize, index * chunkSize + chunkSize),
     );
     setBoundaries(null);
     setLoadError(false);
@@ -338,9 +344,11 @@ function AustraliaMap({
         outSR: "4326",
         f: "geojson",
       });
+      if (geometryGeneralisation)
+        query.set("maxAllowableOffset", geometryGeneralisation);
       const response = await fetch(
-        `https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/0/query?${query}`,
-        { signal: controller.signal },
+        "https://geo.abs.gov.au/arcgis/rest/services/ASGS2021/POA/MapServer/0/query",
+        { method: "POST", body: query, signal: controller.signal },
       );
       if (!response.ok) throw new Error(`Boundary request failed: ${response.status}`);
       return response.json();
@@ -348,7 +356,7 @@ function AustraliaMap({
 
     const loadBoundaries = async () => {
       const results = [];
-      const concurrentRequests = 6;
+      const concurrentRequests = 3;
 
       try {
         for (let start = 0; start < chunks.length; start += concurrentRequests) {
@@ -376,10 +384,11 @@ function AustraliaMap({
 
     loadBoundaries();
     return () => controller.abort();
-  }, [postcodes, onBoundaryCodes]);
+  }, [geometryGeneralisation, postcodes, onBoundaryCodes]);
 
   const selectedCode = selected?.code;
   const showPostcodeLabels = zoom >= 9;
+  const isDenseMap = (boundaries?.features.length || 0) > 600;
   const updateVisibleLabels = useCallback((nextCodes) => {
     setVisibleLabelCodes((currentCodes) => {
       if (
@@ -440,6 +449,7 @@ function AustraliaMap({
         ]}
         maxBoundsViscosity={1}
         scrollWheelZoom
+        preferCanvas
         zoomControl={false}
         className="zone-map"
       >
@@ -454,16 +464,23 @@ function AustraliaMap({
           selectedCode={selectedCode}
           focusZoom={focusZoom}
         />
-        <LabelDensity
-          boundaries={boundaries}
-          selectedCode={selectedCode}
-          onChange={updateVisibleLabels}
-        />
+        {!isDenseMap && (
+          <LabelDensity
+            boundaries={boundaries}
+            selectedCode={selectedCode}
+            onChange={updateVisibleLabels}
+          />
+        )}
         {boundaries && (
           <GeoJSON
-            key={`${selectedCode}-${zoom}-${labelKey}`}
+            key={
+              isDenseMap
+                ? "dense-postcode-boundaries"
+                : `${selectedCode}-${zoom}-${labelKey}`
+            }
             data={boundaries}
             style={style}
+            smoothFactor={isDenseMap ? 2.5 : 1}
             onEachFeature={onEachFeature}
           />
         )}
@@ -472,7 +489,9 @@ function AustraliaMap({
         <span>TABLE {table.number}</span>
         <strong>{table.label}</strong>
         <small>
-          {showPostcodeLabels
+          {isDenseMap
+            ? "Choose a state or postcode to inspect a busy area"
+            : showPostcodeLabels
             ? "Labels are reduced in dense areas — zoom in for more"
             : "Hover a boundary, or zoom in to show labels"}
         </small>
@@ -604,10 +623,18 @@ function App() {
   );
   const availableStates = useMemo(
     () =>
-      [...new Set(searchMatches.map((item) => item.state))].sort((a, b) =>
-        (stateNames[a] || a).localeCompare(stateNames[b] || b),
-      ),
-    [searchMatches],
+      [
+        ...new Set(
+          jobPostcodes
+            .filter((item) =>
+              `${item.code} ${item.town} ${item.state} ${stateNames[item.state] || ""}`
+                .toLowerCase()
+                .includes(query.toLowerCase()),
+            )
+            .map((item) => item.state),
+        ),
+      ].sort((a, b) => (stateNames[a] || a).localeCompare(stateNames[b] || b)),
+    [jobPostcodes, query],
   );
   const matches = useMemo(
     () =>
@@ -663,6 +690,7 @@ function App() {
   };
   const changeStateFilter = (value) => {
     setStateFilter(value);
+    setSelected(null);
     setPage(1);
   };
   const changeJobFilter = (value) => {
@@ -685,7 +713,7 @@ function App() {
       selected &&
       !mapBoundaryCodes.includes(selected.code)
     )
-      setSelected(mappablePostcodes[0] || null);
+      setSelected(null);
   }, [mapBoundaryCodes, mappablePostcodes, selected]);
 
   return (
@@ -693,7 +721,7 @@ function App() {
       <header className="topbar">
         <div className="brand">
           <BrandMark />
-          <span>Work &amp; Holiday Guide</span>
+          <span>Work &amp; Holiday Book</span>
         </div>
         <nav
           className={mobileMenuOpen ? "open" : ""}
@@ -725,29 +753,31 @@ function App() {
           <span />
         </button>
       </header>
-      <section className="hero">
-        <div>
-          <p className="eyebrow">WORK & HOLIDAY · SUBCLASS 462</p>
-          <h1>
-            Make your Australian year
-            <br />
-            <em>count.</em>
-          </h1>
-          <p className="hero-copy">
-            Check eligible postcodes and specified work for your second or third
-            Work and Holiday visa.
-          </p>
-        </div>
-        <div className="hero-note">
-          <span className="note-icon">✦</span>
+      {activeView === "map" && (
+        <section className="hero">
           <div>
-            <strong>Work smart, stay longer</strong>
-            <p>
-              Specified work must be paid and completed in an eligible area.
+            <p className="eyebrow">WORK & HOLIDAY · SUBCLASS 462</p>
+            <h1>
+              Make your Australian year
+              <br />
+              <em>count.</em>
+            </h1>
+            <p className="hero-copy">
+              Check eligible postcodes and specified work for your second or third
+              Work and Holiday visa.
             </p>
           </div>
-        </div>
-      </section>
+          <div className="hero-note">
+            <span className="note-icon">✦</span>
+            <div>
+              <strong>Work smart, stay longer</strong>
+              <p>
+                Specified work must be paid and completed in an eligible area.
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
       {activeView === "map" ? (
         <section className="workspace">
           <aside className="sidebar">
@@ -962,7 +992,7 @@ function App() {
       )}
       <footer>
         <span>
-          Work &amp; Holiday Guide / an easier way to plan your regional year
+          Work &amp; Holiday Book / your 462 visa companion
         </span>
         <span>
           Data guide updated 05 APR 2025 · Always verify before you start

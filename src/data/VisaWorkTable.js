@@ -40,17 +40,22 @@ export class VisaWorkTable {
 }
 
 export class CsvVisaWorkTable extends VisaWorkTable {
-  constructor({ sourceUrl, allPostcodeStates = [], ...config }) {
+  constructor({ sourceCsv, sourceUrl, allPostcodeStates = [], ...config }) {
     super({ ...config, ranges: [] });
+    this.sourceCsv = sourceCsv;
     this.sourceUrl = sourceUrl;
     this.allPostcodeStates = allPostcodeStates;
   }
 
   async load() {
     if (this._loaded) return this.postcodes;
-    const response = await fetch(this.sourceUrl);
-    if (!response.ok) throw new Error(`Could not load ${this.id} postcodes`);
-    const rows = (await response.text()).trim().split(/\r?\n/).slice(1);
+    let csv = this.sourceCsv;
+    if (!csv) {
+      const response = await fetch(this.sourceUrl);
+      if (!response.ok) throw new Error(`Could not load ${this.id} postcodes`);
+      csv = await response.text();
+    }
+    const rows = csv.trim().split(/\r?\n/).slice(1);
     const entries = rows.flatMap(row => {
       const commaIndex = row.indexOf(',');
       if (commaIndex < 0) return [];
@@ -60,7 +65,9 @@ export class CsvVisaWorkTable extends VisaWorkTable {
       if (/all postcodes|all areas/i.test(codes)) return this.expandAll(stateName, state);
       return codes.split(',').map(code => this.createPostcode(code.trim(), state));
     });
-    this._postcodes = Array.from(new Map(entries.map(item => [item.code, item])).values()).sort((a, b) => a.code.localeCompare(b.code));
+    this._postcodes = Array.from(
+      new Map([...entries, ...this.namedPostcodes].map(item => [item.code, item])).values(),
+    ).sort((a, b) => a.code.localeCompare(b.code));
     this._loaded = true;
     return this.postcodes;
   }
