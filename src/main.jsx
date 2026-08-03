@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import L from "leaflet";
 import {
@@ -28,10 +28,25 @@ function BrandMark() {
   return <span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 28 28" fill="none"><circle cx="18.5" cy="8.5" r="3" fill="currentColor" /><path d="M5 20.5c3.3-4.5 6.2-4.5 9.2-.8 2.3 2.8 4.7 3 8.8-.2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /><path d="M5 16.5v4h4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg></span>;
 }
 
-function ChecklistCard({ title, items, tone = "green" }) {
+function GuideIcon({ name }) {
+  const paths = {
+    passport: <><rect x="5" y="3.5" width="14" height="17" rx="2" /><circle cx="12" cy="10" r="2.2" /><path d="M8.5 16c1.9-2 5.1-2 7 0" /></>,
+    wallet: <><path d="M4 7.5h14.5A1.5 1.5 0 0 1 20 9v9.5A1.5 1.5 0 0 1 18.5 20H5.5A1.5 1.5 0 0 1 4 18.5z" /><path d="M4 8V6.5A1.5 1.5 0 0 1 5.5 5H17" /><path d="M15 13h5" /><circle cx="15" cy="13" r=".6" fill="currentColor" /></>,
+    family: <><circle cx="9" cy="8" r="2.3" /><circle cx="16.5" cy="9.5" r="1.8" /><path d="M4.8 18c.4-3 2-4.6 4.2-4.6s3.9 1.6 4.3 4.6" /><path d="M13.3 17.5c.4-2.2 1.6-3.5 3.3-3.5 1.5 0 2.7 1.1 3.1 3.2" /></>,
+    health: <><circle cx="12" cy="12" r="8" /><path d="M12 8v8M8 12h8" /></>,
+    letter: <><rect x="4" y="6" width="16" height="12" rx="1.5" /><path d="m5 7 7 5 7-5" /></>,
+  };
+  return <span className="guide-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg></span>;
+}
+
+function GuideCardTitle({ icon, children }) {
+  return <div className="guide-card-title"><GuideIcon name={icon} /><h3>{children}</h3></div>;
+}
+
+function ChecklistCard({ title, items, tone = "green", icon }) {
   return (
     <article className={`guide-card ${tone}`}>
-      <h3>{title}</h3>
+      <GuideCardTitle icon={icon}>{title}</GuideCardTitle>
       <ul>
         {items.map(([label, description]) => (
           <li key={label}>
@@ -77,20 +92,23 @@ function VisaGuide() {
           title="1. Personal documents"
           items={personalChecklist}
           tone="blue"
+          icon="passport"
         />
         <ChecklistCard
           title="2. If you fund yourself"
           items={selfFundedChecklist}
+          icon="wallet"
         />
         <ChecklistCard
           title="3. If someone sponsors you"
           items={sponsorChecklist}
           tone="gold"
+          icon="family"
         />
       </div>
       <div className="guide-grid guide-bottom">
         <article className="guide-card health">
-          <h3>4. Health check</h3>
+          <GuideCardTitle icon="health">4. Health check</GuideCardTitle>
           <p>{healthCheck.note}</p>
           <h4>Typical Work & Holiday checks shown in your reference</h4>
           <ul className="compact-list">
@@ -113,7 +131,7 @@ function VisaGuide() {
           </small>
         </article>
         <article className="guide-card letter">
-          <h3>Financial support letter</h3>
+          <GuideCardTitle icon="letter">Financial support letter</GuideCardTitle>
           <p>
             Use a concise English letter to connect your bank balance to a
             clear, supported source of income.
@@ -277,7 +295,13 @@ function LabelDensity({ boundaries, selectedCode, onChange }) {
 
 function useResponsivePageSize() {
   const getPageSize = () =>
-    window.innerWidth <= 850 ? 6 : window.innerHeight >= 1000 ? 12 : 10;
+    window.innerWidth <= 700
+      ? 3
+      : window.innerWidth <= 850
+        ? 6
+        : window.innerHeight >= 1000
+          ? 12
+          : 10;
   const [pageSize, setPageSize] = useState(getPageSize);
   useEffect(() => {
     const updatePageSize = () => setPageSize(getPageSize());
@@ -310,7 +334,7 @@ function AustraliaMap({
   postcodes,
   selected,
   onSelect,
-  onBoundaryCodes,
+  onBoundaryData,
   focusZoom,
 }) {
   const [boundaries, setBoundaries] = useState(null);
@@ -356,7 +380,7 @@ function AustraliaMap({
 
     const loadBoundaries = async () => {
       const results = [];
-      const concurrentRequests = 3;
+      const concurrentRequests = 4;
 
       try {
         for (let start = 0; start < chunks.length; start += concurrentRequests) {
@@ -367,16 +391,19 @@ function AustraliaMap({
           settled.forEach((result) => {
             if (result.status === "fulfilled") results.push(result.value);
           });
+          const loadedFeatures = results.flatMap((result) => result.features || []);
+          if (loadedFeatures.length) {
+            onBoundaryData(loadedFeatures);
+            setBoundaries({ type: "FeatureCollection", features: loadedFeatures });
+          }
           setLoadingProgress({
             loaded: Math.min(start + batch.length, chunks.length),
             total: chunks.length,
           });
         }
 
-        const features = results.flatMap((result) => result.features || []);
-        if (!features.length) throw new Error("No postcode boundaries returned");
-        onBoundaryCodes(features.map(postcodeCode));
-        setBoundaries({ type: "FeatureCollection", features });
+        if (!results.some((result) => result.features?.length))
+          throw new Error("No postcode boundaries returned");
       } catch (error) {
         if (!controller.signal.aborted) setLoadError(true);
       }
@@ -384,7 +411,7 @@ function AustraliaMap({
 
     loadBoundaries();
     return () => controller.abort();
-  }, [geometryGeneralisation, postcodes, onBoundaryCodes]);
+  }, [geometryGeneralisation, onBoundaryData, postcodes]);
 
   const selectedCode = selected?.code;
   const showPostcodeLabels = zoom >= 9;
@@ -507,6 +534,422 @@ function AustraliaMap({
   );
 }
 
+const PLANNER_STORAGE_KEY = "wah-88-day-planner";
+const EVIDENCE_ITEMS = [
+  ["contract", "Contract / offer"],
+  ["payslip", "Payslip"],
+  ["bankTransfer", "Bank transfer"],
+  ["timesheet", "Timesheet / roster"],
+  ["taxRecord", "Tax record"],
+];
+
+const emptyPlannerDraft = () => ({
+  mode: "planned",
+  postcode: "",
+  workType: "",
+  startDate: "",
+  endDate: "",
+  employerName: "",
+  employerAbn: "",
+  workplace: "",
+  supervisor: "",
+  actualDays: "",
+  rosterNote: "",
+  evidence: {},
+});
+
+function inclusiveDays(startDate, endDate) {
+  const start = Date.parse(`${startDate}T00:00:00Z`);
+  const end = Date.parse(`${endDate}T00:00:00Z`);
+  return Math.floor((end - start) / 86_400_000) + 1;
+}
+
+function AnimatedNumber({ value, celebrate }) {
+  const [displayValue, setDisplayValue] = useState(value);
+  const previousValue = useRef(value);
+
+  useEffect(() => {
+    const from = previousValue.current;
+    previousValue.current = value;
+    if (from === value || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setDisplayValue(value);
+      return undefined;
+    }
+    const startedAt = performance.now();
+    const duration = 520;
+    let frameId;
+    const animate = (now) => {
+      const progress = Math.min((now - startedAt) / duration, 1);
+      const eased = 1 - (1 - progress) ** 3;
+      setDisplayValue(Math.round(from + (value - from) * eased));
+      if (progress < 1) frameId = requestAnimationFrame(animate);
+    };
+    frameId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frameId);
+  }, [value]);
+
+  return <strong className={celebrate ? "planner-number-celebrate" : ""}>{displayValue}</strong>;
+}
+
+function playPlannerChime() {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  const context = new AudioContext();
+  const now = context.currentTime;
+  [660, 880].forEach((frequency, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const start = now + index * 0.12;
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(frequency, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.065, start + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.42);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.44);
+  });
+  window.setTimeout(() => context.close(), 700);
+}
+
+function Planner({ allPostcodes, eligibilityIndex, jobOptions, postcodePlace }) {
+  const [entries, setEntries] = useState([]);
+  const [ready, setReady] = useState(false);
+  const [draft, setDraft] = useState(emptyPlannerDraft);
+  const [editingId, setEditingId] = useState(null);
+  const [formError, setFormError] = useState("");
+  const [celebrateTotal, setCelebrateTotal] = useState(false);
+  const [backupMessage, setBackupMessage] = useState("");
+  const [showPlannedTimeline, setShowPlannedTimeline] = useState(false);
+  const [showRecords, setShowRecords] = useState(false);
+
+  useEffect(() => {
+    try {
+      const savedEntries = window.localStorage.getItem(PLANNER_STORAGE_KEY);
+      if (savedEntries) setEntries(JSON.parse(savedEntries));
+    } catch {
+      // The planner remains usable if private browsing blocks storage.
+    } finally {
+      setReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    try {
+      window.localStorage.setItem(PLANNER_STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+      // A storage failure should not prevent planning work entries.
+    }
+  }, [entries, ready]);
+
+  const actualEligibleDays = entries
+    .filter((entry) => entry.eligible && entry.mode === "actual")
+    .reduce((total, entry) => total + entry.days, 0);
+  const plannedEligibleDays = entries
+    .filter((entry) => entry.eligible)
+    .reduce((total, entry) => total + entry.days, 0);
+  const progress = Math.min((actualEligibleDays / 88) * 100, 100);
+  const remainingDays = Math.max(88 - actualEligibleDays, 0);
+
+  const updateDraft = (field, value) => {
+    setDraft((current) => ({ ...current, [field]: value }));
+    setFormError("");
+  };
+
+  const saveEntry = (event) => {
+    event.preventDefault();
+    const postcode = draft.postcode.trim().padStart(4, "0");
+    if (!/^\d{4}$/.test(postcode) || !draft.workType || !draft.startDate || !draft.endDate) {
+      setFormError("Add a postcode, work type and start/end dates.");
+      return;
+    }
+    const days = inclusiveDays(draft.startDate, draft.endDate);
+    if (days < 1 || Number.isNaN(days)) {
+      setFormError("The end date needs to be on or after the start date.");
+      return;
+    }
+    const actualDays = Number(draft.actualDays);
+    if (
+      draft.mode === "actual" &&
+      (!Number.isInteger(actualDays) || actualDays < 1 || actualDays > days)
+    ) {
+      setFormError("Add the number of days worked within this date range.");
+      return;
+    }
+    const postcodeRecord = allPostcodes.find((item) => item.code === postcode);
+    const eligibility = eligibilityIndex[postcode];
+    const eligible = Boolean(eligibility?.jobs.includes(draft.workType));
+    const entry = {
+      ...draft,
+      id: editingId || `${Date.now()}-${postcode}`,
+      postcode,
+      location: postcodeRecord ? postcodePlace(postcodeRecord) : "",
+      workType: draft.workType,
+      startDate: draft.startDate,
+      endDate: draft.endDate,
+      calendarDays: days,
+      days: draft.mode === "actual" ? actualDays : days,
+      eligible,
+    };
+    setEntries((current) =>
+      editingId
+        ? current.map((item) => (item.id === editingId ? entry : item))
+        : [...current, entry],
+    );
+    if (!editingId && entry.mode === "actual" && entry.eligible) {
+      setCelebrateTotal(true);
+      playPlannerChime();
+      window.setTimeout(() => setCelebrateTotal(false), 750);
+    }
+    if (!editingId) {
+      setShowRecords(true);
+      window.setTimeout(() => {
+        document.querySelector(".planner-entries")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 0);
+    }
+    setDraft(emptyPlannerDraft());
+    setEditingId(null);
+  };
+
+  const editEntry = (entry) => {
+    setDraft({ ...emptyPlannerDraft(), ...entry, evidence: entry.evidence || {} });
+    setEditingId(entry.id);
+    setFormError("");
+    window.setTimeout(() => document.querySelector(".planner-form")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  };
+
+  const removeEntry = (entry) => {
+    if (!window.confirm(`Delete the ${entry.postcode} work record? This cannot be undone.`)) return;
+    setEntries((current) => current.filter((item) => item.id !== entry.id));
+  };
+
+  const evidenceCount = (entry) =>
+    EVIDENCE_ITEMS.filter(([key]) => entry.evidence?.[key]).length;
+  const timelineEntries = useMemo(
+    () => [...entries].sort((a, b) => String(a.startDate || "").localeCompare(String(b.startDate || ""))),
+    [entries],
+  );
+  const ganttRange = useMemo(() => {
+    const datedEntries = timelineEntries.filter((entry) => entry.startDate && entry.endDate);
+    if (!datedEntries.length) return null;
+    const timestamps = datedEntries.flatMap((entry) => [
+      Date.parse(`${entry.startDate}T00:00:00Z`),
+      Date.parse(`${entry.endDate}T00:00:00Z`),
+    ]).filter(Number.isFinite);
+    const start = Math.min(...timestamps);
+    const end = Math.max(...timestamps);
+    const totalDays = Math.max(1, Math.floor((end - start) / 86_400_000) + 1);
+    return {
+      start,
+      end,
+      totalDays,
+      startLabel: new Date(start).toISOString().slice(0, 10),
+      midLabel: new Date(start + ((end - start) / 2)).toISOString().slice(0, 10),
+      endLabel: new Date(end).toISOString().slice(0, 10),
+    };
+  }, [timelineEntries]);
+
+  const downloadFile = (filename, contents, type) => {
+    const blob = new Blob([contents], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportCsv = () => {
+    const quote = (value) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    const rows = entries.map((entry) => [
+      entry.mode || "planned", entry.postcode, entry.location, entry.workType,
+      entry.startDate, entry.endDate, entry.days, entry.eligible ? "Eligible match" : "Needs review",
+      entry.employerName, entry.employerAbn, entry.workplace, entry.supervisor,
+      entry.rosterNote, EVIDENCE_ITEMS.filter(([key]) => entry.evidence?.[key]).map(([, label]) => label).join("; "),
+    ].map(quote).join(","));
+    downloadFile(
+      "wah-88-day-work-records.csv",
+      ["Mode,Postcode,Area,Work type,Start date,End date,Days,Check,Employer,ABN,Workplace,Supervisor,Roster note,Evidence", ...rows].join("\n"),
+      "text/csv;charset=utf-8",
+    );
+    setBackupMessage("CSV downloaded.");
+  };
+
+  return (
+    <section className="planner">
+      <div className="planner-heading">
+        <div>
+          <p className="eyebrow">WORK & HOLIDAY · SUBCLASS 462</p>
+          <h2>88-day planner</h2>
+          <p>Plan specified work, check each postcode and keep an estimate of your eligible days.</p>
+        </div>
+        <div className="planner-actions">
+          <button type="button" onClick={exportCsv} disabled={!entries.length}>Export CSV</button>
+          <span className="planner-draft">Draft planner</span>
+        </div>
+      </div>
+      {backupMessage && <p className="planner-backup-message">{backupMessage}</p>}
+      <div className="planner-alert">
+        <strong>Planning estimate only</strong>
+        <span>Home Affairs uses specified-work rules and calendar-month requirements. Confirm your evidence and eligibility before applying.</span>
+      </div>
+      <div className="planner-grid">
+        <form className="planner-form" onSubmit={saveEntry}>
+          <div className="planner-card-head">
+            <GuideIcon name="letter" />
+            <div><h3>{editingId ? "Edit work record" : "Add work record"}</h3><p>Each entry is saved only in this browser.</p></div>
+          </div>
+          <div className="planner-mode" aria-label="Record type">
+            <button type="button" className={draft.mode === "planned" ? "selected" : ""} onClick={() => updateDraft("mode", "planned")}>Planned</button>
+            <button type="button" className={draft.mode === "actual" ? "selected" : ""} onClick={() => updateDraft("mode", "actual")}>Actual work</button>
+          </div>
+          <label>
+            <span>POSTCODE</span>
+            <input
+              inputMode="numeric"
+              maxLength="4"
+              value={draft.postcode}
+              onChange={(event) => updateDraft("postcode", event.target.value.replace(/\D/g, ""))}
+              placeholder="e.g. 0800"
+            />
+          </label>
+          <label>
+            <span>WORK TYPE</span>
+            <select className={draft.workType ? "" : "is-placeholder"} value={draft.workType} onChange={(event) => updateDraft("workType", event.target.value)}>
+              <option value="">Choose a work type</option>
+              {jobOptions.map((job) => <option key={job} value={job}>{job}</option>)}
+            </select>
+          </label>
+          <div className="planner-date-row">
+            <label><span>START DATE</span><input className={draft.startDate ? "" : "is-placeholder"} type="date" value={draft.startDate} onChange={(event) => updateDraft("startDate", event.target.value)} /></label>
+            <label><span>END DATE</span><input className={draft.endDate ? "" : "is-placeholder"} type="date" value={draft.endDate} onChange={(event) => updateDraft("endDate", event.target.value)} /></label>
+          </div>
+          {draft.mode === "actual" && (
+            <div className="planner-actual-work">
+              <label><span>ACTUAL DAYS WORKED</span><input inputMode="numeric" type="number" min="1" value={draft.actualDays} onChange={(event) => updateDraft("actualDays", event.target.value)} placeholder="e.g. 10" /></label>
+              <label><span>ROSTER / TIMESHEET NOTE</span><textarea value={draft.rosterNote} onChange={(event) => updateDraft("rosterNote", event.target.value)} placeholder="e.g. Mon–Fri, 8 hours per day" /></label>
+            </div>
+          )}
+          <details className="planner-details">
+            <summary>Employer details <span>optional</span></summary>
+            <div className="planner-detail-grid">
+              <label><span>EMPLOYER / BUSINESS</span><input value={draft.employerName} onChange={(event) => updateDraft("employerName", event.target.value)} placeholder="Business name" /></label>
+              <label><span>ABN</span><input inputMode="numeric" value={draft.employerAbn} onChange={(event) => updateDraft("employerAbn", event.target.value)} placeholder="Australian Business Number" /></label>
+              <label><span>WORKPLACE</span><input value={draft.workplace} onChange={(event) => updateDraft("workplace", event.target.value)} placeholder="Town or worksite" /></label>
+              <label><span>SUPERVISOR CONTACT</span><input value={draft.supervisor} onChange={(event) => updateDraft("supervisor", event.target.value)} placeholder="Name, phone or email" /></label>
+            </div>
+          </details>
+          <fieldset className="evidence-list">
+            <legend>Evidence checklist <span>optional</span></legend>
+            <div>
+              {EVIDENCE_ITEMS.map(([key, label]) => (
+                <label key={key}>
+                  <input type="checkbox" checked={Boolean(draft.evidence[key])} onChange={(event) => updateDraft("evidence", { ...draft.evidence, [key]: event.target.checked })} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {formError && <p className="planner-error">{formError}</p>}
+          <div className="planner-submit-row">
+            {editingId && <button type="button" className="planner-cancel" onClick={() => { setDraft(emptyPlannerDraft()); setEditingId(null); }}>Cancel</button>}
+            <button type="submit" disabled={!jobOptions.length}>{editingId ? "Save changes" : "Add to plan"}</button>
+          </div>
+        </form>
+        <aside className="planner-summary">
+          <p className="eyebrow">ACTUAL ELIGIBLE DAYS</p>
+          <div className="planner-total"><AnimatedNumber value={actualEligibleDays} celebrate={celebrateTotal} /><span>/ 88 days</span></div>
+          <div className="planner-progress" aria-label={`${actualEligibleDays} of 88 actual days recorded`}><span style={{ width: `${progress}%` }} /></div>
+          <p>{remainingDays ? `${remainingDays} more actual days to reach 88.` : "88-day planning target reached."}</p>
+          <div className="planner-projection"><span>Projected eligible days</span><strong>{plannedEligibleDays}</strong></div>
+          <small>Only postcode and work-type matches are included. Keep evidence for every actual record.</small>
+        </aside>
+      </div>
+      <div className="planner-records-flow">
+      <section className="planner-entries">
+        <div className="planner-list-head records-head"><div><h3>Your work records</h3><span>{entries.length} entries</span></div><button type="button" aria-expanded={showRecords} onClick={() => setShowRecords((current) => !current)}>{showRecords ? "Collapse" : "Show records"}</button></div>
+        {showRecords && entries.length > 0 && (
+          <div className="planner-table-head" aria-hidden="true">
+            <span>POSTCODE / AREA</span>
+            <span>WORK TYPE</span>
+            <span>PERIOD</span>
+            <span>CHECK</span>
+            <span>DAYS</span>
+            <span />
+          </div>
+        )}
+        {showRecords && entries.length ? (
+          <div className="planner-entry-list">
+            {entries.map((entry) => (
+              <article className="planner-entry" key={entry.id}>
+                <div className="planner-entry-grid">
+                  <div className="entry-location"><strong>{entry.postcode}</strong><span>{entry.location || "Eligible postcode"}</span></div>
+                  <p className="entry-work">{entry.workType}</p>
+                  <p className="entry-period">{entry.startDate} → {entry.endDate}</p>
+                  <div className="entry-checks"><span className={entry.eligible ? "entry-status eligible" : "entry-status review"}>{entry.eligible ? "Eligible match" : "Needs review"}</span><span className={`record-mode ${entry.mode || "planned"}`}>{entry.mode === "actual" ? "Actual" : "Planned"}</span></div>
+                  <div className="entry-days"><strong>{entry.days}</strong><span>days</span></div>
+                  <div className="entry-actions"><button type="button" onClick={() => editEntry(entry)}>Edit</button><button type="button" aria-label={`Remove ${entry.postcode} entry`} onClick={() => removeEntry(entry)}>×</button></div>
+                </div>
+                <details className="entry-details">
+                  <summary>Employer &amp; evidence <span>{evidenceCount(entry)} / {EVIDENCE_ITEMS.length} checked</span></summary>
+                  <div><p><strong>Employer</strong>{entry.employerName || "Not added"}</p><p><strong>ABN</strong>{entry.employerAbn || "Not added"}</p><p><strong>Workplace</strong>{entry.workplace || "Not added"}</p><p><strong>Supervisor</strong>{entry.supervisor || "Not added"}</p>{entry.mode === "actual" && <p><strong>Roster note</strong>{entry.rosterNote || "Not added"}</p>}</div>
+                  <ul>{EVIDENCE_ITEMS.map(([key, label]) => <li className={entry.evidence?.[key] ? "done" : ""} key={key}>{entry.evidence?.[key] ? "✓" : "○"} {label}</li>)}</ul>
+                </details>
+              </article>
+            ))}
+          </div>
+        ) : showRecords ? <p className="planner-empty">Add your first work record above. Your entries stay on this device.</p> : <p className="planner-collapsed-note">Records are collapsed to keep your planner focused.</p>}
+      </section>
+      <section className="planner-timeline">
+        <div className="planner-list-head timeline-head"><h3>Work timeline</h3><div><button type="button" className={showPlannedTimeline ? "selected" : ""} onClick={() => setShowPlannedTimeline((current) => !current)}>Show planned work</button></div></div>
+        {ganttRange ? (
+          <>
+          <p className="gantt-mobile-hint">Swipe sideways to view the full timeline.</p>
+          <div className="gantt-scroll" aria-label="Work timeline, scroll horizontally on mobile">
+            <div className="gantt-chart">
+              <div className="gantt-axis"><span>RECORD</span><div><span>{ganttRange.startLabel}</span><span>{ganttRange.midLabel}</span><span>{ganttRange.endLabel}</span></div></div>
+              {(showPlannedTimeline ? ["actual", "planned"] : ["actual"]).map((mode) => {
+                const groupEntries = timelineEntries.filter(
+                  (entry) =>
+                    (entry.mode || "planned") === mode && entry.startDate && entry.endDate,
+                );
+                return (
+                  <section className={`gantt-group ${mode}`} key={mode}>
+                    <h4>{mode === "actual" ? "ACTUAL WORK DAYS" : "PLANNED WORK DAYS"}<span>{groupEntries.length} records</span></h4>
+                    {groupEntries.length ? groupEntries.map((entry) => {
+                      const entryStart = Date.parse(`${entry.startDate}T00:00:00Z`);
+                      const calendarDays = entry.calendarDays || inclusiveDays(entry.startDate, entry.endDate);
+                      const left = ((entryStart - ganttRange.start) / 86_400_000 / ganttRange.totalDays) * 100;
+                      const width = Math.max((calendarDays / ganttRange.totalDays) * 100, 2.8);
+                      return (
+                        <div className="gantt-row" key={entry.id}>
+                          <div><strong>{entry.postcode}</strong><span>{entry.workType}</span></div>
+                          <div className="gantt-track">
+                            <button type="button" className="gantt-bar" style={{ left: `${left}%`, width: `${width}%` }} onClick={() => editEntry(entry)} title={`Edit ${entry.postcode}: ${entry.startDate} to ${entry.endDate}`}>
+                              <span>{entry.days}d</span>
+                            </button>
+                          </div>
+                          <button className="gantt-delete" type="button" aria-label={`Remove ${entry.postcode} entry`} onClick={() => removeEntry(entry)}>×</button>
+                        </div>
+                      );
+                    }) : <p className="gantt-empty">No {mode} records yet.</p>}
+                  </section>
+                );
+              })}
+            </div>
+          </div>
+          </>
+        ) : <p className="planner-empty">Your planned and actual work periods will appear here.</p>}
+      </section>
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const pageSize = useResponsivePageSize();
   const [table, setTable] = useState(activeTable);
@@ -520,9 +963,27 @@ function App() {
   const [allPostcodes, setAllPostcodes] = useState([]);
   const [jobFilter, setJobFilter] = useState("all");
   const [mapBoundaryCodes, setMapBoundaryCodes] = useState(null);
+  const [mapAreaNames, setMapAreaNames] = useState({});
   const [selectionSource, setSelectionSource] = useState("list");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState("map");
+  const handleBoundaryData = useCallback((features) => {
+    setMapBoundaryCodes(features.map(postcodeCode));
+    const namesByCode = {};
+    features.forEach((feature) => {
+      const code = postcodeCode(feature);
+      const name = feature.properties?.poa_name_2021?.trim();
+      if (!name || name === code) return;
+      (namesByCode[code] ||= new Set()).add(name);
+    });
+    setMapAreaNames((currentNames) => {
+      const nextNames = { ...currentNames };
+      Object.entries(namesByCode).forEach(([code, names]) => {
+        nextNames[code] = names.size === 1 ? [...names][0] : "Multiple suburbs";
+      });
+      return nextNames;
+    });
+  }, []);
   useEffect(() => {
     let active = true;
     Promise.allSettled(
@@ -605,21 +1066,26 @@ function App() {
           ),
     [allPostcodes, eligibilityIndex, jobFilter, postcodes],
   );
+  const postcodePlace = useCallback(
+    (item) => mapAreaNames[item.code] || item.town,
+    [mapAreaNames],
+  );
   const mappablePostcodes = useMemo(
     () =>
       mapBoundaryCodes
         ? jobPostcodes.filter((item) => mapBoundaryCodes.includes(item.code))
-        : jobPostcodes,
+        : [],
     [jobPostcodes, mapBoundaryCodes],
   );
+  const boundariesLoading = postcodes.length > 0 && mapBoundaryCodes === null;
   const searchMatches = useMemo(
     () =>
       mappablePostcodes.filter((item) =>
-        `${item.code} ${item.town} ${item.state} ${stateNames[item.state] || ""}`
+        `${item.code} ${postcodePlace(item)} ${item.state} ${stateNames[item.state] || ""}`
           .toLowerCase()
           .includes(query.toLowerCase()),
       ),
-    [mappablePostcodes, query],
+    [mappablePostcodes, postcodePlace, query],
   );
   const availableStates = useMemo(
     () =>
@@ -627,14 +1093,14 @@ function App() {
         ...new Set(
           jobPostcodes
             .filter((item) =>
-              `${item.code} ${item.town} ${item.state} ${stateNames[item.state] || ""}`
+              `${item.code} ${postcodePlace(item)} ${item.state} ${stateNames[item.state] || ""}`
                 .toLowerCase()
                 .includes(query.toLowerCase()),
             )
             .map((item) => item.state),
         ),
       ].sort((a, b) => (stateNames[a] || a).localeCompare(stateNames[b] || b)),
-    [jobPostcodes, query],
+    [jobPostcodes, postcodePlace, query],
   );
   const matches = useMemo(
     () =>
@@ -669,6 +1135,7 @@ function App() {
   };
   const changeTable = (item) => {
     setJobFilter("all");
+    setMapBoundaryCodes(null);
     setPage(1);
     setTable(item);
   };
@@ -676,7 +1143,10 @@ function App() {
     setSelectionSource(source);
     setSelected(item);
     window.setTimeout(() => {
-      const target = document.querySelector(".workspace");
+      const isMobile = window.matchMedia("(max-width: 700px)").matches;
+      const target = isMobile
+        ? document.querySelector(".main-panel")
+        : document.querySelector(".workspace");
       target?.scrollIntoView({
         behavior: "smooth",
         block: "start",
@@ -691,11 +1161,13 @@ function App() {
   const changeStateFilter = (value) => {
     setStateFilter(value);
     setSelected(null);
+    setMapBoundaryCodes(null);
     setPage(1);
   };
   const changeJobFilter = (value) => {
     setJobFilter(value);
     setStateFilter("all");
+    setMapBoundaryCodes(null);
     setPage(1);
   };
   const mapPostcodes = useMemo(() => {
@@ -731,13 +1203,19 @@ function App() {
             className={activeView === "map" ? "active" : ""}
             onClick={() => navigateTo("map")}
           >
-            Postcode map
+            Work map
           </a>
           <a
             className={activeView === "guide" ? "active" : ""}
             onClick={() => navigateTo("guide")}
           >
             Visa guide
+          </a>
+          <a
+            className={activeView === "planner" ? "active" : ""}
+            onClick={() => navigateTo("planner")}
+          >
+            88-day planner
           </a>
           <a className="disabled" aria-disabled="true">Find jobs</a>
         </nav>
@@ -755,12 +1233,20 @@ function App() {
       </header>
       {activeView === "map" && (
         <section className="hero">
+          <div className="hero-route" aria-hidden="true">
+            <svg viewBox="0 0 420 230" fill="none">
+              <path d="M26 177c48-82 97-91 141-43 40 43 85 25 108-18 25-47 68-58 120-35" />
+              <circle cx="26" cy="177" r="5" />
+              <circle cx="275" cy="116" r="5" />
+              <path className="hero-route-arrow" d="m383 75 12 6-7 11" />
+            </svg>
+          </div>
           <div>
             <p className="eyebrow">WORK & HOLIDAY · SUBCLASS 462</p>
             <h1>
-              Make your Australian year
+              Make your Australian
               <br />
-              <em>count.</em>
+              year <em>count.</em>
             </h1>
             <p className="hero-copy">
               Check eligible postcodes and specified work for your second or third
@@ -787,7 +1273,7 @@ function App() {
                 <h2>Where can I work?</h2>
               </div>
               <span className="count">
-                {loadingTable ? "Loading…" : `${matches.length} areas`}
+                {loadingTable || boundariesLoading ? "Loading…" : `${matches.length} areas`}
               </span>
             </div>
             <div className="search">
@@ -808,6 +1294,7 @@ function App() {
                   onClick={() => changeTable(item)}
                   title={`Table ${item.number}: ${item.label}`}
                 >
+                  <span className="table-dot" style={{ background: item.accent }} />
                   {item.shortLabel}
                 </button>
               ))}
@@ -855,22 +1342,22 @@ function App() {
                       onClick={() => selectPostcode(item, "list")}
                     >
                       <span className="postcode-number">{item.code}</span>
-                      <span className="postcode-place">{item.town}</span>
+                      <span className="postcode-place">{postcodePlace(item)}</span>
                       <span className="row-arrow">→</span>
                     </button>
                   ))}
                 </section>
               ))}
-              {loadingTable && (
+              {(loadingTable || boundariesLoading) && (
                 <p className="empty">Loading Table {table.number} postcodes…</p>
               )}
-              {!loadingTable && !matches.length && (
+              {!loadingTable && !boundariesLoading && !matches.length && (
                 <p className="empty">
                   No matching postcodes for this work type.
                 </p>
               )}
             </div>
-            {!loadingTable && matches.length > 0 && (
+            {!loadingTable && !boundariesLoading && matches.length > 0 && (
               <div className="pagination">
                 <button
                   onClick={() => setPage(currentPage - 1)}
@@ -890,7 +1377,9 @@ function App() {
               </div>
             )}
             <p className="side-foot">
-              {matches.length
+              {boundariesLoading
+                ? "Loading verified postcode boundaries…"
+                : matches.length
                 ? `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, matches.length)} of ${matches.length} areas in this category.`
                 : "Choose a category or search for a postcode."}
             </p>
@@ -915,7 +1404,7 @@ function App() {
                 postcodes={mapPostcodes}
                 selected={selected}
                 onSelect={(item) => selectPostcode(item, "map")}
-                onBoundaryCodes={setMapBoundaryCodes}
+                onBoundaryData={handleBoundaryData}
                 focusZoom={selectionSource === "map" ? 7 : 9}
               />
             )}
@@ -932,7 +1421,7 @@ function App() {
                     <div className="selected-place">
                       <h2>{selected.code}</h2>
                       <span>
-                        {selected.town},{" "}
+                        {postcodePlace(selected)},{" "}
                         {stateNames[selected.state] || selected.state}
                       </span>
                     </div>
@@ -987,8 +1476,15 @@ function App() {
             )}
           </div>
         </section>
-      ) : (
+      ) : activeView === "guide" ? (
         <VisaGuide />
+      ) : (
+        <Planner
+          allPostcodes={allPostcodes}
+          eligibilityIndex={eligibilityIndex}
+          jobOptions={jobOptions}
+          postcodePlace={postcodePlace}
+        />
       )}
       <footer>
         <span>
