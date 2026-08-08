@@ -70,7 +70,7 @@ const localitiesByCode = new Map();
 
 const result = Object.fromEntries([...localitiesByCode.entries()].map(([code, localities]) => {
   const names = [...localities].sort((a, b) => a.localeCompare(b));
-  return [code, { label: names.length === 1 ? names[0] : "Multiple suburbs", search: names.join(" ") }];
+  return [code, names];
 }));
 await writeFile(new URL("../src/data/eligibleLocalities.json", import.meta.url), `${JSON.stringify(result)}\n`);
 console.log(`Generated ${Object.keys(result).length} eligible postcode localities.`);

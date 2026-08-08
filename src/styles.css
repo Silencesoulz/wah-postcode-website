@@ -803,6 +803,99 @@ button {
   color: #397253;
   background: #e4f2e5;
 }
+.detail-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 7px;
+}
+.detail-actions button,
+.saved-postcodes > div > p > button {
+  border: 1px solid #c9dccd;
+  border-radius: 999px;
+  background: #fff;
+  color: #3e7252;
+  cursor: pointer;
+  font: 700 10px Manrope, sans-serif;
+}
+.detail-actions button {
+  min-height: 29px;
+  padding: 0 10px;
+}
+.detail-actions button.saved {
+  border-color: #9cc9a6;
+  background: #e8f4e9;
+}
+.saved-postcodes {
+  margin: 1px 0 11px;
+  border: 1px solid #dce8de;
+  border-radius: 7px;
+  background: #f9fcf9;
+}
+.saved-postcodes summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 10px;
+  color: #4a6d5b;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+.saved-postcodes summary span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e3f0e5;
+  color: #4c805c;
+  font: 9px "DM Mono", monospace;
+}
+.saved-postcodes > div {
+  padding: 0 7px 7px;
+}
+.saved-postcodes > div > p {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  border-top: 1px solid #e6eee7;
+}
+.saved-postcodes > div > p > button:first-child {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  min-height: 31px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #4b6b5c;
+  text-align: left;
+}
+.saved-postcodes > div > p > button:first-child strong {
+  font: 700 10px "DM Mono", monospace;
+}
+.saved-postcodes > div > p > button:first-child span {
+  overflow: hidden;
+  color: #83928c;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-postcodes > div > p > button:last-child {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #93a39c;
+  font-size: 17px;
+}
+.saved-postcodes > div > p > button:last-child:hover {
+  color: #a64438;
+}
 .eligibility-grid {
   display: grid;
   grid-template-columns: 150px 1fr 1.35fr;
@@ -3043,5 +3136,18 @@ footer {
   }
   .planner-heading h2 {
     font-size: 24px;
+  }
+}
+
+@media (max-width: 700px) {
+  .detail-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .detail-actions {
+    justify-content: flex-start;
+  }
+  .detail-actions button {
+    min-height: 32px;
   }
 }

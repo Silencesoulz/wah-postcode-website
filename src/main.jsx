@@ -139,71 +139,19 @@ function VisaGuide() {
   );
 }
 
-function LocalityExplorer({ postcode }) {
-  const [localitiesByPostcode, setLocalitiesByPostcode] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
-  const localities = localitiesByPostcode?.[postcode] || [];
-
-  const loadLocalities = async () => {
-    if (localitiesByPostcode || loading) return;
-    setLoading(true);
-    setError(false);
-    try {
-      const response = await fetch(
-        "https://raw.githubusercontent.com/matthewproctor/australianpostcodes/master/australian_postcodes.csv",
-      );
-      if (!response.ok) throw new Error("Could not load locality data");
-      const index = {};
-      (await response.text())
-        .split(/\r?\n/)
-        .slice(1)
-        .forEach((row) => {
-          const columns = row.startsWith('"')
-            ? row.slice(1, -1).split('","')
-            : row.split(",");
-          const [, code, locality, state] = columns;
-          if (!code || !locality || !state) return;
-          const entry = (index[code] ||= new Set());
-          entry.add(`${locality} (${state})`);
-        });
-      setLocalitiesByPostcode(
-        Object.fromEntries(
-          Object.entries(index).map(([code, values]) => [
-            code,
-            [...values].sort(),
-          ]),
-        ),
-      );
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+function LocalityExplorer({ postcode, localities = [] }) {
   return (
     <section className="locality-explorer locality-inline">
       <div className="locality-copy">
         <p className="eyebrow">POSTCODE LOCALITIES</p>
-        <h2>Localities for {postcode}</h2>
-        <p>One postcode can cover multiple suburbs, towns or localities.</p>
+        <h2>Localities in {postcode}</h2>
+        <p>{localities.length > 1 ? `${localities.length} localities use this postcode.` : "One locality uses this postcode."}</p>
       </div>
-      {!localitiesByPostcode && (
-        <button onClick={loadLocalities} disabled={loading}>
-          {loading ? "Loading localities…" : "Show localities"}
-        </button>
-      )}
-      {error && <small>Could not load locality data. Please try again.</small>}
-      {localitiesByPostcode && (
-        <div className="locality-results">
-          {localities.length ? (
-            localities.map((locality) => <span key={locality}>{locality}</span>)
-          ) : (
-            <small>No locality names were found for this postcode.</small>
-          )}
-        </div>
-      )}
+      <div className="locality-results">
+        {localities.length
+          ? localities.map((locality) => <span key={locality}>{locality}</span>)
+          : <small>No locality names were found for this postcode.</small>}
+      </div>
     </section>
   );
 }
@@ -550,6 +498,7 @@ function DeferredAustraliaMap(props) {
 }
 
 const PLANNER_STORAGE_KEY = "wah-88-day-planner";
+const SAVED_POSTCODES_STORAGE_KEY = "wah-saved-postcodes";
 const EVIDENCE_ITEMS = [
   ["contract", "Contract / offer"],
   ["payslip", "Payslip"],
@@ -985,12 +934,38 @@ function App() {
   const [selectionSource, setSelectionSource] = useState("list");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [activeView, setActiveView] = useState("map");
+  const [savedPostcodes, setSavedPostcodes] = useState(() => {
+    try {
+      return JSON.parse(window.localStorage.getItem(SAVED_POSTCODES_STORAGE_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  });
   const pendingSelectionRef = useRef(null);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SAVED_POSTCODES_STORAGE_KEY, JSON.stringify(savedPostcodes));
+    } catch {
+      // Saved postcodes remain usable for the current session if storage is unavailable.
+    }
+  }, [savedPostcodes]);
   useEffect(() => {
     let active = true;
     import("./data/eligibleLocalities.json")
       .then((module) => {
-        if (active) setLocalityLookup(module.default);
+        if (!active) return;
+        setLocalityLookup(
+          Object.fromEntries(
+            Object.entries(module.default).map(([code, localities]) => [
+              code,
+              {
+                label: localities.length === 1 ? localities[0] : "Multiple suburbs",
+                localities,
+                search: localities.join(" "),
+              },
+            ]),
+          ),
+        );
       })
       .catch(() => {
         if (active) setLocalityLookup({});
@@ -1246,6 +1221,26 @@ function App() {
     setPage(1);
     setTable(item);
   };
+  const isSavedPostcode = (code) => savedPostcodes.some((item) => item.code === code);
+  const toggleSavedPostcode = (item) => {
+    setSavedPostcodes((current) =>
+      current.some((saved) => saved.code === item.code)
+        ? current.filter((saved) => saved.code !== item.code)
+        : [
+            ...current,
+            {
+              code: item.code,
+              place: postcodePlace(item),
+              state: item.state,
+              savedAt: Date.now(),
+            },
+          ],
+    );
+  };
+  const selectSavedPostcode = (saved) => {
+    const item = allPostcodes.find((postcode) => postcode.code === saved.code) || saved;
+    selectPostcode(item, "list");
+  };
   const selectPostcode = (item, source) => {
     const availableAreas = eligibilityIndex[item.code]?.areas || [];
     const targetTable = availableAreas.find((area) => area.id === table.id) || availableAreas[0];
@@ -1470,6 +1465,21 @@ function App() {
                 </button>
               ))}
             </div>
+            {savedPostcodes.length > 0 && (
+              <details className="saved-postcodes">
+                <summary>Saved postcodes <span>{savedPostcodes.length}</span></summary>
+                <div>
+                  {savedPostcodes.map((saved) => (
+                    <p key={saved.code}>
+                      <button type="button" onClick={() => selectSavedPostcode(saved)}>
+                        <strong>{saved.code}</strong><span>{saved.place || "Postcode area"}</span>
+                      </button>
+                      <button type="button" aria-label={`Remove saved postcode ${saved.code}`} onClick={() => toggleSavedPostcode(saved)}>×</button>
+                    </p>
+                  ))}
+                </div>
+              </details>
+            )}
             <label className="state-filter">
               <span>WORK TYPE</span>
               <select
@@ -1590,7 +1600,7 @@ function App() {
               <div className="detail-card">
                 <div className="detail-top">
                   <div>
-                    <p className="eyebrow">SELECTED POSTCODE</p>
+                    <p className="eyebrow">POSTCODE DETAILS</p>
                     <div className="selected-place">
                       <h2>{selected.code}</h2>
                       <span>
@@ -1599,7 +1609,12 @@ function App() {
                       </span>
                     </div>
                   </div>
-                  <Badge>Eligible work area</Badge>
+                  <div className="detail-actions">
+                    <Badge>Eligible work area</Badge>
+                    <button type="button" className={isSavedPostcode(selected.code) ? "saved" : ""} onClick={() => toggleSavedPostcode(selected)}>
+                      {isSavedPostcode(selected.code) ? "Saved ✓" : "Save postcode"}
+                    </button>
+                  </div>
                 </div>
                 <div className="eligibility-grid">
                   <div>
@@ -1631,7 +1646,7 @@ function App() {
                     </div>
                   </div>
                 </div>
-                <LocalityExplorer postcode={selected.code} />
+                <LocalityExplorer postcode={selected.code} localities={localityLookup?.[selected.code]?.localities} />
                 <div className="detail-foot">
                   <span>
                     ⓘ Work categories are combined when this postcode appears in
